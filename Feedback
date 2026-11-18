@@ -1,0 +1,26 @@
+name: Geri Bildirim (Öneri / Sorun / Fikir)
+description: Hata bildirin, yeni özellik önerin veya gamepad uyumluluğu paylaşın.
+title: "[Geri Bildirim]: "
+body:
+  - type: dropdown
+    id: kategori
+    attributes:
+      label: Konu Türü
+      options:
+        - Hata / Sorun Bildirimi
+        - Yeni Özellik / Fikir Önerisi
+        - Gamepad Modeli / Kalibrasyon Desteği
+    validations:
+      required: true
+  - type: input
+    id: gamepad
+    attributes:
+      label: Kullandığınız Gamepad Modeli
+      placeholder: "Örn: Xbox Series, DualShock 4, Logitech F710, Jite KD-890..."
+  - type: textarea
+    id: aciklama
+    attributes:
+      label: Detaylı Açıklama
+      placeholder: Yaşadığınız durumu veya fikrinizi buraya yazın...
+    validations:
+      required: true
