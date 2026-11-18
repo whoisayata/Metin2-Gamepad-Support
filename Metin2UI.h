@@ -34,28 +34,6 @@ namespace M2UI {
             return bmp;
         }
 
-        Gdiplus::Bitmap* CreateDonatePngFromMemory() {
-            if (emb_donate_png_len <= 1) return nullptr;
-            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, emb_donate_png_len);
-            if (!hMem) return nullptr;
-            void* pData = GlobalLock(hMem);
-            if (!pData) { GlobalFree(hMem); return nullptr; }
-            memcpy(pData, emb_donate_png, emb_donate_png_len);
-            GlobalUnlock(hMem);
-
-            IStream* pStream = nullptr;
-            if (FAILED(CreateStreamOnHGlobal(hMem, TRUE, &pStream))) {
-                GlobalFree(hMem);
-                return nullptr;
-            }
-            Gdiplus::Bitmap* bmp = Gdiplus::Bitmap::FromStream(pStream);
-            pStream->Release();
-            if (bmp && bmp->GetLastStatus() != Gdiplus::Ok) {
-                delete bmp;
-                return nullptr;
-            }
-            return bmp;
-        }
 
         void Register(const std::wstring& key, const EmbeddedAsset& asset) {
             cache[key] = CreateFromEmbedded(asset);
@@ -105,7 +83,7 @@ namespace M2UI {
             Register(L"tab_2", emb_tab_2);
             Register(L"tab_3", emb_tab_3);
 
-            cache[L"donate_icon"] = CreateDonatePngFromMemory();
+            Register(L"donate_icon", emb_donate_icon);
         }
 
         void Cleanup() {
@@ -253,6 +231,15 @@ namespace M2UI {
                 : (isActive ? Gdiplus::Color(255, 255, 225, 110) : Gdiplus::Color(255, 245, 242, 235));
             DrawM2Text(g, label, (float)(x + 2), (float)(y + (isActive ? 0 : -1)), (float)(w - 4), (float)h, 12.0f, tCol, Gdiplus::StringAlignmentCenter, false);
         }
+        // Buton disinda bagimsiz buyuk ikon cizimi (or. bagis butonu yanina 34x34)
+        void DrawStandaloneIcon(Gdiplus::Graphics& g, int x, int y, int size, const std::wstring& iconKey) {
+            Gdiplus::Bitmap* icon = Get(iconKey);
+            if (!icon) return;
+            Gdiplus::InterpolationMode prev = g.GetInterpolationMode();
+            g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+            g.DrawImage(icon, Gdiplus::Rect(x, y, size, size), 0, 0, icon->GetWidth(), icon->GetHeight(), Gdiplus::UnitPixel);
+            g.SetInterpolationMode(prev);
+        }
 
         void DrawM2IconButton(Gdiplus::Graphics& g, int x, int y, int w, int h,
             const std::wstring& iconKey, const std::wstring& label,
@@ -260,19 +247,25 @@ namespace M2UI {
             DrawTiledButton(g, isHover ? L"btn_large_2" : L"btn_large_1", x, y, w, h);
 
             Gdiplus::Bitmap* icon = Get(iconKey);
-            int textOffsetX = 0;
+            int iconSize = h - 3;
+            int ix = x + 8;
+            int iy = y + (h - iconSize) / 2;
+
             if (icon) {
-                int iconSize = h - 3;
-                int ix = x + 6;
-                int iy = y + (h - iconSize) / 2;
-                Gdiplus::ImageAttributes attr;
-                attr.SetColorKey(Gdiplus::Color(35, 35, 38), Gdiplus::Color(62, 62, 66), Gdiplus::ColorAdjustTypeBitmap);
                 Gdiplus::InterpolationMode prev = g.GetInterpolationMode();
                 g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-                g.DrawImage(icon, Gdiplus::Rect(ix, iy, iconSize, iconSize), 0, 0, icon->GetWidth(), icon->GetHeight(), Gdiplus::UnitPixel, &attr);
+                g.DrawImage(icon, Gdiplus::Rect(ix, iy, iconSize, iconSize), 0, 0, icon->GetWidth(), icon->GetHeight(), Gdiplus::UnitPixel);
                 g.SetInterpolationMode(prev);
-                textOffsetX = iconSize + 4;
             }
+            else {
+                // Fallback: Altin sikke ikonu
+                Gdiplus::SolidBrush coinBg(Gdiplus::Color(255, 235, 185, 45));
+                Gdiplus::Pen coinBorder(Gdiplus::Color(255, 255, 240, 150), 1.2f);
+                g.FillEllipse(&coinBg, ix + 2, iy + 2, iconSize - 4, iconSize - 4);
+                g.DrawEllipse(&coinBorder, ix + 2, iy + 2, iconSize - 4, iconSize - 4);
+            }
+
+            int textOffsetX = iconSize + 6;
             DrawM2Text(g, label, (float)(x + textOffsetX), (float)(y - 1), (float)(w - textOffsetX - 4), (float)h, 12.0f, textCol, Gdiplus::StringAlignmentCenter, false);
         }
 
@@ -376,9 +369,37 @@ namespace M2UI {
         }
 
         void DrawSlotActiveEffect(Gdiplus::Graphics& g, int x, int y, int slotW, int slotH, int slotSpan) {
-            std::wstring k = (slotSpan == 2) ? L"slot_eff_2" : ((slotSpan >= 3) ? L"slot_eff_3" : L"slot_eff_1");
-            int totalH = slotH * (slotSpan < 1 ? 1 : (slotSpan > 3 ? 3 : slotSpan));
-            DrawBmp(g, k, x - 2, y - 2, slotW + 4, totalH + 4, 0.96f);
+            int span = (slotSpan < 1) ? 1 : ((slotSpan > 3) ? 3 : slotSpan);
+            int totalH = slotH * span;
+
+            std::wstring k = (span == 2) ? L"slot_eff_2" : ((span == 3) ? L"slot_eff_3" : L"slot_eff_1");
+            // Eger 2 veya 3 slotluk doku yoksa 1 slotluk dokuyu tam yukseklige yay
+            if (!DrawBmp(g, k, x - 2, y - 2, slotW + 4, totalH + 4, 0.95f)) {
+                DrawBmp(g, L"slot_eff_1", x - 2, y - 2, slotW + 4, totalH + 4, 0.95f);
+            }
+
+            // Yeni esya efektinden ayirt etmek icin belirgin altin vurgu cercevesi + 4 kose nisangahi
+            Gdiplus::SolidBrush softTint(Gdiplus::Color(38, 255, 215, 40));
+            g.FillRectangle(&softTint, x + 1, y + 1, slotW - 2, totalH - 2);
+
+            Gdiplus::Pen outerGold(Gdiplus::Color(235, 255, 215, 0), 1.5f);
+            g.DrawRectangle(&outerGold, x, y, slotW - 1, totalH - 1);
+
+            // 4 koseye parlak beyaz-altin L kosebent (hedef kilidi gorunumu)
+            Gdiplus::Pen cornerPen(Gdiplus::Color(255, 255, 250, 190), 2.0f);
+            int cLen = 7;
+            // Sol-Ust
+            g.DrawLine(&cornerPen, x, y, x + cLen, y);
+            g.DrawLine(&cornerPen, x, y, x, y + cLen);
+            // Sag-Ust
+            g.DrawLine(&cornerPen, x + slotW - 1 - cLen, y, x + slotW - 1, y);
+            g.DrawLine(&cornerPen, x + slotW - 1, y, x + slotW - 1, y + cLen);
+            // Sol-Alt
+            g.DrawLine(&cornerPen, x, y + totalH - 1 - cLen, x, y + totalH - 1);
+            g.DrawLine(&cornerPen, x, y + totalH - 1, x + cLen, y + totalH - 1);
+            // Sag-Alt
+            g.DrawLine(&cornerPen, x + slotW - 1 - cLen, y + totalH - 1, x + slotW - 1, y + totalH - 1);
+            g.DrawLine(&cornerPen, x + slotW - 1, y + totalH - 1 - cLen, x + slotW - 1, y + totalH - 1);
         }
     };
 }

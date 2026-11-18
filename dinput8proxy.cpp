@@ -13,8 +13,10 @@
 #include "Metin2UI.h"
 
 #include <shellapi.h>
-#pragma comment(lib, "shell32.lib")
+#include <winhttp.h>
 
+#pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -1111,16 +1113,81 @@ static void TapCombo(DWORD combo) {
 }
 
 // =========================================================================
-// 5. METIN2 ORIJINAL BOARD TASARIMLI F8 KONTROL MERKEZI (PER-PIXEL ALPHA)
+// 5. METIN2 ORIJINAL BOARD TASARIMLI F8 KONTROL MERKEZI + GERI BILDIRIM
 // =========================================================================
 static const int UI_WIN_W = 560;
 static const int UI_WIN_H = 736;
 
-// GitHub kullanici adini ve bagis linkini buraya yaz:
-static const wchar_t* URL_FEEDBACK = L"https://github.com/KULLANICI_ADIN/Metin2-Gamepad-Support/issues/new/choose";
-static const wchar_t* URL_DONATE = L"https://buymeacoffee.com/KULLANICI_ADIN";
+// Linklerini ve Webhook/API adresini buraya yaz:
+static const wchar_t* URL_BYNOGAME = L"https://donate.bynogame.com/whoisayata";
+static const wchar_t* URL_PATREON = L"https://www.patreon.com/c/whoisayata/membership";
+static const wchar_t* URL_GITHUB_ISSUE = L"https://github.com/SENIN_KULLANICI_ADIN/Metin2-Gamepad-Support/issues/new/choose";
+
+// Otomatik gonderim icin Discord Webhook veya Cloudflare Worker URL'si (bos birakilirsa GitHub acilir):
+static const wchar_t* URL_FEEDBACK_WEBHOOK = L"https://discord.com/api/webhooks/1572444940074750072/eOLKVi_L4sIH2UcbAKy9Dn5emdRju8csocz2y92UCUXMG625W7P7Rx6duHq3UBrmW-Ax";
 
 static int g_uiHoverId = 0;
+
+// Geri Bildirim & Bagis Modal Durumlari (0 = Kapali, 1 = Geri Bildirim, 2 = Bagis Secimi)
+static int g_modalMode = 0;
+static int g_fbCategory = 0; // 0: Hata/Sorun, 1: Fikir/Oneri, 2: Kol Uyumlulugu
+static std::wstring g_fbText = L"";
+static std::wstring g_fbStatusMsg = L"";
+
+static std::string WideToUtf8(const std::wstring& w) {
+    if (w.empty()) return "";
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
+    std::string out(len, 0);
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &out[0], len, NULL, NULL);
+    return out;
+}
+
+static std::string EscapeJson(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '\"') out += "\\\"";
+        else if (c == '\\') out += "\\\\";
+        else if (c == '\n') out += "\\n";
+        else if (c == '\r') {}
+        else out += c;
+    }
+    return out;
+}
+
+static bool SendFeedbackAsync(int catIdx, const std::wstring& msgW) {
+    if (!URL_FEEDBACK_WEBHOOK || wcslen(URL_FEEDBACK_WEBHOOK) < 10) return false;
+
+    const wchar_t* catNames[3] = { L"Hata / Sorun", L"Fikir / Öneri", L"Kol Uyumluluğu" };
+    std::wstring title = std::wstring(L"[Metin2 Gamepad - ") + catNames[catIdx] + L"]";
+    std::string payload = "{\"content\":\"**" + EscapeJson(WideToUtf8(title)) + "**\\n" + EscapeJson(WideToUtf8(msgW)) + "\"}";
+
+    URL_COMPONENTSW uc = {};
+    uc.dwStructSize = sizeof(uc);
+    wchar_t host[256] = {}, path[1024] = {};
+    uc.lpszHostName = host; uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
+
+    if (!WinHttpCrackUrl(URL_FEEDBACK_WEBHOOK, 0, 0, &uc)) return false;
+
+    HINTERNET hSession = WinHttpOpen(L"Metin2GamepadUI/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    if (!hSession) return false;
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+
+    DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+
+    const wchar_t* hdrs = L"Content-Type: application/json\r\n";
+    BOOL ok = WinHttpSendRequest(hRequest, hdrs, (DWORD)-1L, (LPVOID)payload.c_str(), (DWORD)payload.size(), (DWORD)payload.size(), 0);
+    if (ok) ok = WinHttpReceiveResponse(hRequest, NULL);
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return ok == TRUE;
+}
 
 static void AssignPadMaskWithConflictCheck(int targetIdx, DWORD newMask) {
     int targetTab = g_binds[targetIdx].tabId;
@@ -1151,10 +1218,31 @@ static void AssignPadMaskWithConflictCheck(int targetIdx, DWORD newMask) {
 }
 
 static int HitTestConfigUI(int mx, int my) {
-    // Sag ust X butonu
+    // Modal aciksa sadece modal icindeki butonlari kontrol et
+    if (g_modalMode == 1) {
+        // Geri Bildirim Modal (TitleBar: x=73, y=222, w=414 -> X ikonu: 466..484, 224..242)
+        if (mx >= 464 && mx <= 485 && my >= 224 && my <= 243) return 505; // Sag ust X (ayri ID!)
+        if (my >= 264 && my <= 286) {
+            if (mx >= 78 && mx <= 212) return 501;  // Hata / Sorun
+            if (mx >= 218 && mx <= 352) return 502; // Fikir / Oneri
+            if (mx >= 358 && mx <= 482) return 503; // Kol Destegi
+        }
+        if (my >= 454 && my <= 476) {
+            if (mx >= 230 && mx <= 355) return 504; // Gonder
+            if (mx >= 362 && mx <= 482) return 500; // Iptal
+        }
+        return 0;
+    }
+    if (g_modalMode == 2) {
+        // Bagis Secim Modal (TitleBar: x=123, y=282, w=315 -> X ikonu: 417..435, 284..302)
+        if (mx >= 415 && mx <= 436 && my >= 284 && my <= 303) return 515; // Sag ust X
+        if (mx >= 140 && mx <= 420 && my >= 332 && my <= 355) return 510; // ByNoGame
+        if (mx >= 140 && mx <= 420 && my >= 366 && my <= 389) return 511; // Patreon
+        return 0;
+    }
+
     if (mx >= UI_WIN_W - 35 && mx <= UI_WIN_W - 18 && my >= 15 && my <= 32) return 1;
 
-    // Envanter sekmesi stilindeki Savas / Genel & Envanter Tuslari sekmeleri
     if (my >= 42 && my <= 65) {
         if (mx >= 20 && mx <= 276) return 2;
         if (mx >= 284 && mx <= 540) return 3;
@@ -1175,7 +1263,6 @@ static int HitTestConfigUI(int mx, int my) {
         visIdx++;
     }
 
-    // 1. Alt Satir: Yatay Hiz & HUD Butonu
     int ctrlY1 = 626;
     if (my >= ctrlY1 && my <= ctrlY1 + 21) {
         if (mx >= 20 && mx <= 90) return 10;
@@ -1183,7 +1270,6 @@ static int HitTestConfigUI(int mx, int my) {
         if (mx >= 310 && mx <= 540) return 12;
     }
 
-    // 2. Alt Satir: Dikey Hiz & Kaydet & Kapat
     int ctrlY2 = 656;
     if (my >= ctrlY2 && my <= ctrlY2 + 21) {
         if (mx >= 20 && mx <= 90) return 13;
@@ -1191,11 +1277,12 @@ static int HitTestConfigUI(int mx, int my) {
         if (mx >= 310 && mx <= 540) return 15;
     }
 
-    // 3. Alt Satir: Geri Bildirim & Destek Ol (Bagis)
     int ctrlY3 = 686;
     if (my >= ctrlY3 && my <= ctrlY3 + 21) {
         if (mx >= 20 && mx <= 268) return 16;
-        if (mx >= 310 && mx <= 540) return 17;
+    }
+    if (mx >= 310 && mx <= 540 && my >= ctrlY3 - 6 && my <= ctrlY3 + 26) {
+        return 17;
     }
 
     return 0;
@@ -1232,17 +1319,12 @@ static void RepaintConfigUI() {
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
         g.SetTextRenderingHint(Gdiplus::TextRenderingHintSingleBitPerPixelGridFit);
 
-        // 1. Metin2 Tas Board
         g_m2ui.DrawBoard(g, 0, 0, UI_WIN_W, UI_WIN_H, 1.0f);
-
-        // 2. TitleBar & X Butonu
         g_m2ui.DrawTitleBar(g, 13, 12, UI_WIN_W - 26, 23, L"Gamepad Kontrol Merkezi (F8)", g_uiHoverId == 1);
 
-        // 3. Envanter Sekmesi Gorunumunde Sekmeler
         g_m2ui.DrawInventoryStyleTab(g, 20, 42, 256, 23, L"Savaş / Genel", g_activeUiTab == 0, g_uiHoverId == 2);
         g_m2ui.DrawInventoryStyleTab(g, 284, 42, 256, 23, L"Envanter Tuşları", g_activeUiTab == 1, g_uiHoverId == 3);
 
-        // 4. Eylem Satirlari
         int visIdx = 0;
         for (int i = 0; i < ACT_COUNT; i++) {
             if (g_binds[i].tabId != g_activeUiTab) continue;
@@ -1263,19 +1345,15 @@ static void RepaintConfigUI() {
             Gdiplus::Color keyCol = (g_listeningKey == i) ? Gdiplus::Color(255, 115, 225, 255) : Gdiplus::Color(255, 236, 232, 224);
             g_m2ui.DrawM2Button(g, 382, y, 128, 21, keyTxt, g_listeningKey == i, g_uiHoverId == 200 + i, keyCol);
 
-            // Baslik cubugundaki X ile ayni ikon
             g_m2ui.DrawCloseIconButton(g, 518, y + 3, g_uiHoverId == 300 + i);
-
             visIdx++;
         }
 
-        // 5. Bilgi Satirlari
         g_m2ui.DrawM2Text(g, L"Envanter Modu: Yalnızca Sağ Analog ile slotlar arası gezinilir (2-3 slotluk eşyalar otomatik atlanır).",
             20.0f, 566.0f, 520.0f, 18.0f, 11.5f, Gdiplus::Color(255, 195, 190, 180), Gdiplus::StringAlignmentCenter, false);
         g_m2ui.DrawM2Text(g, L"Not: Kol üzerindeki MODE / ANALOG ışığının açık olduğundan emin olun.",
             20.0f, 586.0f, 520.0f, 18.0f, 11.5f, Gdiplus::Color(255, 240, 205, 95), Gdiplus::StringAlignmentCenter, false);
 
-        // 6. Alt Kamera Hizi & HUD Kontrol Butonlari
         int ctrlY1 = 626;
         g_m2ui.DrawM2Button(g, 20, ctrlY1, 70, 21, L"Yatay -", false, g_uiHoverId == 10);
         wchar_t bufX[48];
@@ -1298,13 +1376,69 @@ static void RepaintConfigUI() {
 
         g_m2ui.DrawM2Button(g, 310, ctrlY2, 230, 21, L"Kaydet & Kapat (F8)", false, g_uiHoverId == 15);
 
-        // 7. Topluluk Satiri: Geri Bildirim & Ikonlu Destek Ol (Bagis) Butonu
         int ctrlY3 = 686;
         g_m2ui.DrawM2Button(g, 20, ctrlY3, 248, 21, L"Geri Bildirim (Öneri / Sorun / Fikir)", false, g_uiHoverId == 16,
             Gdiplus::Color(255, 165, 215, 255));
 
-        g_m2ui.DrawM2IconButton(g, 310, ctrlY3, 230, 21, L"donate_icon", L"Destek Ol (Bağış)", g_uiHoverId == 17,
+        // 34x34 buyuk kasketli ikon butonun hemen solunda, buton yaninda (sag kenar 540'da hizali)
+        g_m2ui.DrawStandaloneIcon(g, 310, ctrlY3 - 7, 34, L"donate_icon");
+        g_m2ui.DrawM2Button(g, 350, ctrlY3, 190, 21, L"Destek Ol (Bağış)", false, g_uiHoverId == 17,
             Gdiplus::Color(255, 255, 220, 95));
+
+        // --- MODAL PENCERELER (GERI BILDIRIM / BAGIS SECIMI) ---
+        if (g_modalMode != 0) {
+            Gdiplus::SolidBrush dimBrush(Gdiplus::Color(165, 0, 0, 0));
+            g.FillRectangle(&dimBrush, 12, 12, UI_WIN_W - 24, UI_WIN_H - 24);
+        }
+
+        if (g_modalMode == 1) {
+            g_m2ui.DrawBoard(g, 60, 210, 440, 290, 1.0f);
+            g_m2ui.DrawTitleBar(g, 73, 222, 414, 23, L"Geri Bildirim Gönder", g_uiHoverId == 505);
+
+            g_m2ui.DrawM2Button(g, 78, 264, 134, 22, L"Hata / Sorun", g_fbCategory == 0, g_uiHoverId == 501);
+            g_m2ui.DrawM2Button(g, 218, 264, 134, 22, L"Fikir / Öneri", g_fbCategory == 1, g_uiHoverId == 502);
+            g_m2ui.DrawM2Button(g, 358, 264, 124, 22, L"Kol Desteği", g_fbCategory == 2, g_uiHoverId == 503);
+
+            // Metin Yazma Kutusu
+            Gdiplus::SolidBrush boxBg(Gdiplus::Color(245, 14, 13, 12));
+            Gdiplus::Pen boxBorder(Gdiplus::Color(255, 130, 118, 92), 1.0f);
+            g.FillRectangle(&boxBg, 78, 296, 404, 145);
+            g.DrawRectangle(&boxBorder, 78, 296, 404, 145);
+
+            // Cok satirli metin cizimi
+            Gdiplus::TextRenderingHint prevH = g.GetTextRenderingHint();
+            g.SetTextRenderingHint(Gdiplus::TextRenderingHintSingleBitPerPixelGridFit);
+            Gdiplus::FontFamily ff(L"Tahoma");
+            Gdiplus::Font font(&ff, 12.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            Gdiplus::StringFormat fmt;
+            fmt.SetAlignment(Gdiplus::StringAlignmentNear);
+            fmt.SetLineAlignment(Gdiplus::StringAlignmentNear);
+
+            std::wstring displayStr = g_fbText.empty()
+                ? L"Mesajınızı klavyeden yazın (Kullandığınız kol modelini ve yaşadığınız durumu veya fikrinizi belirtin)..."
+                : (g_fbText + L"_");
+            Gdiplus::Color txtC = g_fbText.empty() ? Gdiplus::Color(255, 130, 125, 115) : Gdiplus::Color(255, 245, 240, 228);
+            Gdiplus::SolidBrush tb(txtC);
+            g.DrawString(displayStr.c_str(), -1, &font, Gdiplus::RectF(86.0f, 304.0f, 388.0f, 130.0f), &fmt, &tb);
+            g.SetTextRenderingHint(prevH);
+
+            if (!g_fbStatusMsg.empty()) {
+                g_m2ui.DrawM2Text(g, g_fbStatusMsg, 78.0f, 454.0f, 148.0f, 22.0f, 11.5f,
+                    Gdiplus::Color(255, 120, 235, 140), Gdiplus::StringAlignmentNear, false);
+            }
+
+            g_m2ui.DrawM2Button(g, 230, 454, 125, 22, L"Gönder", false, g_uiHoverId == 504, Gdiplus::Color(255, 140, 235, 140));
+            g_m2ui.DrawM2Button(g, 362, 454, 120, 22, L"İptal", false, g_uiHoverId == 500);
+        }
+        else if (g_modalMode == 2) {
+            g_m2ui.DrawBoard(g, 110, 270, 340, 155, 1.0f);
+            g_m2ui.DrawTitleBar(g, 123, 282, 315, 23, L"Projeye Destek Ol", g_uiHoverId == 515);
+
+            g_m2ui.DrawM2IconButton(g, 140, 332, 280, 23, L"donate_icon", L"ByNoGame Üzerinden Destek Ol", g_uiHoverId == 510,
+                Gdiplus::Color(255, 255, 225, 110));
+            g_m2ui.DrawM2IconButton(g, 140, 366, 280, 23, L"donate_icon", L"Patreon Üzerinden Destek Ol", g_uiHoverId == 511,
+                Gdiplus::Color(255, 255, 185, 120));
+        }
     }
 
     RECT rcWnd;
@@ -1339,10 +1473,64 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         }
         return 0;
     }
+    case WM_CHAR: {
+        if (g_modalMode == 1) {
+            wchar_t ch = (wchar_t)wParam;
+            if (ch == L'\b') {
+                if (!g_fbText.empty()) g_fbText.pop_back();
+            }
+            else if (ch == L'\r') {
+                if (g_fbText.size() < 450) g_fbText += L'\n';
+            }
+            else if (ch >= 32 && g_fbText.size() < 450) {
+                g_fbText += ch;
+            }
+            RepaintConfigUI();
+            return 0;
+        }
+        break;
+    }
     case WM_LBUTTONDOWN: {
         int mx = (short)LOWORD(lParam);
         int my = (short)HIWORD(lParam);
         int hit = HitTestConfigUI(mx, my);
+
+        if (g_modalMode != 0) {
+            if (hit == 500 || hit == 505 || hit == 515) {
+                g_modalMode = 0; g_fbStatusMsg.clear(); RepaintConfigUI();
+            }
+            else if (hit == 501) { g_fbCategory = 0; RepaintConfigUI(); }
+            else if (hit == 502) { g_fbCategory = 1; RepaintConfigUI(); }
+            else if (hit == 503) { g_fbCategory = 2; RepaintConfigUI(); }
+            else if (hit == 504) {
+                if (g_fbText.size() < 3) {
+                    g_fbStatusMsg = L"Lütfen mesaj yazın!";
+                    RepaintConfigUI();
+                }
+                else {
+                    if (SendFeedbackAsync(g_fbCategory, g_fbText)) {
+                        g_fbText.clear();
+                        g_fbStatusMsg = L"Gönderildi, teşekkürler!";
+                        RepaintConfigUI();
+                    }
+                    else {
+                        // Webhook ayarli degilse GitHub Issue sayfasini acar
+                        ShellExecuteW(NULL, L"open", URL_GITHUB_ISSUE, NULL, NULL, SW_SHOWNORMAL);
+                        g_modalMode = 0;
+                        RepaintConfigUI();
+                    }
+                }
+            }
+            else if (hit == 510) {
+                ShellExecuteW(NULL, L"open", URL_BYNOGAME, NULL, NULL, SW_SHOWNORMAL);
+                g_modalMode = 0; RepaintConfigUI();
+            }
+            else if (hit == 511) {
+                ShellExecuteW(NULL, L"open", URL_PATREON, NULL, NULL, SW_SHOWNORMAL);
+                g_modalMode = 0; RepaintConfigUI();
+            }
+            return 0;
+        }
 
         if (my >= 10 && my <= 35 && hit != 1) {
             ReleaseCapture();
@@ -1355,58 +1543,30 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             SaveConfig(); ShowWindow(hwnd, SW_HIDE);
             if (g_gameWnd) SetForegroundWindow(g_gameWnd);
         }
-        else if (hit == 2) {
-            g_activeUiTab = 0; g_listeningAction = -1; g_listeningKey = -1;
-            RepaintConfigUI();
-        }
-        else if (hit == 3) {
-            g_activeUiTab = 1; g_listeningAction = -1; g_listeningKey = -1;
-            RepaintConfigUI();
-        }
-        else if (hit >= 100 && hit < 100 + ACT_COUNT) {
-            g_listeningKey = -1; g_listeningAction = hit - 100;
-            RepaintConfigUI();
-        }
-        else if (hit >= 200 && hit < 200 + ACT_COUNT) {
-            g_listeningAction = -1; g_listeningKey = hit - 200;
-            RepaintConfigUI();
-        }
+        else if (hit == 2) { g_activeUiTab = 0; g_listeningAction = -1; g_listeningKey = -1; RepaintConfigUI(); }
+        else if (hit == 3) { g_activeUiTab = 1; g_listeningAction = -1; g_listeningKey = -1; RepaintConfigUI(); }
+        else if (hit >= 100 && hit < 100 + ACT_COUNT) { g_listeningKey = -1; g_listeningAction = hit - 100; RepaintConfigUI(); }
+        else if (hit >= 200 && hit < 200 + ACT_COUNT) { g_listeningAction = -1; g_listeningKey = hit - 200; RepaintConfigUI(); }
         else if (hit >= 300 && hit < 300 + ACT_COUNT) {
-            g_binds[hit - 300].padMask = 0;
-            g_listeningAction = -1; g_listeningKey = -1;
+            g_binds[hit - 300].padMask = 0; g_listeningAction = -1; g_listeningKey = -1;
             SaveConfig(); RepaintConfigUI();
         }
-        else if (hit == 10) {
-            if (g_camSpeedX > 0.5f) g_camSpeedX -= 0.5f;
-            SaveConfig(); RepaintConfigUI();
-        }
-        else if (hit == 11) {
-            if (g_camSpeedX < 35.0f) g_camSpeedX += 0.5f;
-            SaveConfig(); RepaintConfigUI();
-        }
-        else if (hit == 12) {
-            g_showCombatHUD = !g_showCombatHUD;
-            SaveConfig(); RepaintConfigUI(); UpdateInventoryOverlay();
-        }
-        else if (hit == 13) {
-            if (g_camSpeedY > 0.5f) g_camSpeedY -= 0.5f;
-            SaveConfig(); RepaintConfigUI();
-        }
-        else if (hit == 14) {
-            if (g_camSpeedY < 35.0f) g_camSpeedY += 0.5f;
-            SaveConfig(); RepaintConfigUI();
-        }
-        else if (hit == 16) {
-            ShellExecuteW(NULL, L"open", URL_FEEDBACK, NULL, NULL, SW_SHOWNORMAL);
-        }
-        else if (hit == 17) {
-            ShellExecuteW(NULL, L"open", URL_DONATE, NULL, NULL, SW_SHOWNORMAL);
-        }
+        else if (hit == 10) { if (g_camSpeedX > 0.5f) g_camSpeedX -= 0.5f; SaveConfig(); RepaintConfigUI(); }
+        else if (hit == 11) { if (g_camSpeedX < 35.0f) g_camSpeedX += 0.5f; SaveConfig(); RepaintConfigUI(); }
+        else if (hit == 12) { g_showCombatHUD = !g_showCombatHUD; SaveConfig(); RepaintConfigUI(); UpdateInventoryOverlay(); }
+        else if (hit == 13) { if (g_camSpeedY > 0.5f) g_camSpeedY -= 0.5f; SaveConfig(); RepaintConfigUI(); }
+        else if (hit == 14) { if (g_camSpeedY < 35.0f) g_camSpeedY += 0.5f; SaveConfig(); RepaintConfigUI(); }
+        else if (hit == 16) { g_modalMode = 1; g_fbStatusMsg.clear(); RepaintConfigUI(); }
+        else if (hit == 17) { g_modalMode = 2; RepaintConfigUI(); }
         return 0;
     }
     case WM_SYSKEYDOWN:
     case WM_KEYDOWN: {
         WORD vk = (WORD)wParam;
+        if (g_modalMode != 0) {
+            if (vk == VK_ESCAPE) { g_modalMode = 0; RepaintConfigUI(); }
+            return 0;
+        }
         if (vk == VK_F8 || vk == VK_ESCAPE) {
             g_listeningAction = -1; g_listeningKey = -1;
             SaveConfig(); ShowWindow(hwnd, SW_HIDE);
@@ -1429,38 +1589,39 @@ static LRESULT CALLBACK ConfigWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
     }
     case WM_CLOSE:
-        g_listeningAction = -1; g_listeningKey = -1;
+        g_modalMode = 0; g_listeningAction = -1; g_listeningKey = -1;
         SaveConfig(); ShowWindow(hwnd, SW_HIDE);
         return 0;
     }
-    return DefWindowProcA(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 static void ToggleConfigUI() {
     if (!g_uiWnd) {
-        WNDCLASSA wc = {};
+        WNDCLASSW wc = {};
         wc.lpfnWndProc = ConfigWndProc;
         wc.hInstance = g_hModule;
-        wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
-        wc.lpszClassName = "M2GamepadMetin2BoardWndV5";
-        RegisterClassA(&wc);
+        wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+        wc.lpszClassName = L"M2GamepadMetin2BoardWndV7";
+        RegisterClassW(&wc);
 
         int scrW = GetSystemMetrics(SM_CXSCREEN);
         int scrH = GetSystemMetrics(SM_CYSCREEN);
 
-        g_uiWnd = CreateWindowExA(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW,
-            "M2GamepadMetin2BoardWndV5", "Metin2 Gamepad Kontrol Merkezi",
+        g_uiWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+            L"M2GamepadMetin2BoardWndV7", L"Metin2 Gamepad Kontrol Merkezi",
             WS_POPUP,
             (scrW - UI_WIN_W) / 2, (scrH - UI_WIN_H) / 2, UI_WIN_W, UI_WIN_H,
             NULL, NULL, g_hModule, NULL);
     }
 
     if (IsWindowVisible(g_uiWnd)) {
-        g_listeningAction = -1; g_listeningKey = -1;
+        g_modalMode = 0; g_listeningAction = -1; g_listeningKey = -1;
         SaveConfig(); ShowWindow(g_uiWnd, SW_HIDE);
         if (g_gameWnd) SetForegroundWindow(g_gameWnd);
     }
     else {
+        g_modalMode = 0;
         ShowWindow(g_uiWnd, SW_SHOW);
         SetForegroundWindow(g_uiWnd);
         RepaintConfigUI();
@@ -1487,6 +1648,7 @@ static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM) {
 
 static DWORD WINAPI GamepadWorker(LPVOID) {
     timeBeginPeriod(1);
+    srand((unsigned int)GetTickCount());
 
     Gdiplus::GdiplusStartupInput gdipInput;
     Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdipInput, NULL);
@@ -1502,6 +1664,9 @@ static DWORD WINAPI GamepadWorker(LPVOID) {
     DWORD navHoldDir = 0;
     DWORD navNextRepeatTick = 0;
     DWORD lastOverlayTick = 0;
+
+    DWORD s_nextRepeatTick[COMBAT_ACT_COUNT] = { 0 };
+    bool  s_isRepeating[COMBAT_ACT_COUNT] = { false };
 
     POINT lastPhysicalScreenPt = { -9999, -9999 };
 
@@ -1589,6 +1754,7 @@ static DWORD WINAPI GamepadWorker(LPVOID) {
             SyncBridgeFromD3D9();
             UpdateInventoryOverlay();
             ReleaseAllHeldKeys();
+            for (int i = 0; i < COMBAT_ACT_COUNT; i++) { s_isRepeating[i] = false; s_nextRepeatTick[i] = 0; }
             lastPhysicalScreenPt = curScreenPt;
             Sleep(30);
             continue;
@@ -1601,6 +1767,7 @@ static DWORD WINAPI GamepadWorker(LPVOID) {
             SyncBridgeFromD3D9();
             UpdateInventoryOverlay();
             ReleaseAllHeldKeys();
+            for (int i = 0; i < COMBAT_ACT_COUNT; i++) { s_isRepeating[i] = false; s_nextRepeatTick[i] = 0; }
             lastPhysicalScreenPt = curScreenPt;
             Sleep(50);
             continue;
@@ -1759,6 +1926,11 @@ static DWORD WINAPI GamepadWorker(LPVOID) {
         }
 
         if (g_invOpen) {
+            for (int i = 0; i < COMBAT_ACT_COUNT; i++) {
+                s_isRepeating[i] = false;
+                s_nextRepeatTick[i] = 0;
+            }
+
             DWORD navDir = 0;
             if (!manualFreeCursor) {
                 if (st.ry < -0.45f) navDir |= PAD_UP;
@@ -1815,8 +1987,13 @@ static DWORD WINAPI GamepadWorker(LPVOID) {
                 if (!mask || mask == modMask) continue;
 
                 bool isL2Action = (i >= ACT_L2_ACT1 && i <= ACT_L2_ACT4);
-                if (modHeld && !isL2Action && i != ACT_ATTACK) continue;
-                if (!modHeld && isL2Action) continue;
+                bool canRepeat = (i == ACT_PICKUP || isL2Action);
+
+                if ((modHeld && !isL2Action && i != ACT_ATTACK) || (!modHeld && isL2Action)) {
+                    s_isRepeating[i] = false;
+                    s_nextRepeatTick[i] = 0;
+                    continue;
+                }
 
                 if (g_binds[i].holdMode) {
                     if (pressed & mask) {
@@ -1825,6 +2002,26 @@ static DWORD WINAPI GamepadWorker(LPVOID) {
                     }
                     if (released & mask) {
                         SendCombo(g_binds[i].keyCombo, false);
+                    }
+                }
+                else if (canRepeat) {
+                    bool heldNow = (st.buttons & mask) != 0;
+                    if (heldNow) {
+                        if (!s_isRepeating[i]) {
+                            TapCombo(g_binds[i].keyCombo);
+                            if (isL2Action) g_modLayerUsedCombo = true;
+                            s_isRepeating[i] = true;
+                            s_nextRepeatTick[i] = now + 140 + ((GetTickCount() ^ (rand() << 3)) % 71);
+                        }
+                        else if (now >= s_nextRepeatTick[i]) {
+                            TapCombo(g_binds[i].keyCombo);
+                            if (isL2Action) g_modLayerUsedCombo = true;
+                            s_nextRepeatTick[i] = now + 75 + ((GetTickCount() ^ (rand() << 3)) % 61);
+                        }
+                    }
+                    else {
+                        s_isRepeating[i] = false;
+                        s_nextRepeatTick[i] = 0;
                     }
                 }
                 else {
