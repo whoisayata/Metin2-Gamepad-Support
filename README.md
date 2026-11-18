@@ -26,5 +26,5 @@ Metin2 istemcisine **oyun dosyalarını (root/locale) bozmadan**, harici proxy D
 ## ❤️ Projeye Destek Ol
 
 Projenin geliştirilmesine ve yeni özelliklerin eklenmesine katkıda bulunmak isterseniz:
-* **Patreon (Global):** [patreon.com/SENIN_PATREON_ADIN](https://www.patreon.com/c/whoisayata/membership)
-* **ByNoGame (TR):** [bynogame.com/tr/destekle/SENIN_ADIN](https://www.bynogame.com/tr/destekle/whoisayata)
+* **Patreon (Global):** [patreon.com/whoisayata](https://www.patreon.com/c/whoisayata/membership)
+* **ByNoGame (TR):** [bynogame.com/tr/destekle/whoisayata](https://www.bynogame.com/tr/destekle/whoisayata)
