@@ -23,6 +23,14 @@ Metin2 istemcisine **oyun dosyalarını (root/locale) bozmadan**, harici proxy D
 2. Arşiv içindeki `dinput8.dll` ve `d3d9.dll` dosyalarını Metin2'nin kurulu olduğu ana klasöre (`metin2client.exe` yanına) atın.
 3. Oyunu başlatın ve oyun içinde **`F8`** tuşuna basarak kontrol merkezinizi özelleştirin.
 
+> [!WARNING]
+> **⚠️ Önemli Not ve Sorumluluk Reddi**
+> 
+> Bu araç bir hile değildir; yalnızca kontrolcü desteği sunmak amacıyla oyun dosyalarına harici bir proxy katmanı (`dinput8.dll` & `d3d9.dll`) ekler. Tarafımca **1 haftadır aktif olarak kullanılmakta olup anti-cheat sistemleri tarafından herhangi bir sorunla karşılaşılmamıştır.**
+> 
+> Yine de üçüncü parti bir katman olduğu için oyunda oluşabilecek olası ban veya yaptırımların **tüm sorumluluğu kullanıcıya aittir.** Risk almamak adına ana (asıl) hesabınız yerine yan hesaplarınızda kullanmanız tavsiye edilir.
+
+
 ## ❤️ Projeye Destek Ol
 
 Projenin geliştirilmesine ve yeni özelliklerin eklenmesine katkıda bulunmak isterseniz:
