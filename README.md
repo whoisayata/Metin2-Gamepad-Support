@@ -1,5 +1,8 @@
 # Metin2-Gamepad-Support
 Metin2 için tam kapsamlı Gamepad / Kontrolcü desteği, oyun içi F8 tuş atama paneli ve canlı HUD arayüzü.
+<img width="1364" height="767" alt="image" src="https://github.com/user-attachments/assets/106cb227-8287-4257-8ffa-d9c3482926ad" />
+<img width="1363" height="767" alt="image" src="https://github.com/user-attachments/assets/0d2d87dc-1cfa-4a9d-898d-3227138a4c0b" />
+
 <img width="553" height="728" alt="image" src="https://github.com/user-attachments/assets/527ab1c9-b37a-40d9-8017-5ad5f1a9a47b" />
 
 # Metin2 Gamepad Desteği
