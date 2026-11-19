@@ -4,7 +4,8 @@ Metin2 için tam kapsamlı Gamepad / Kontrolcü desteği, oyun içi F8 tuş atam
 <img width="1364" height="767" alt="709973268-106cb227-8287-4257-8ffa-d9c3482926ad" src="https://github.com/user-attachments/assets/ba6aa64d-f863-43c6-8995-3c2d0e17f13c" />
 
 
-<img width="553" height="728" alt="image" src="https://github.com/user-attachments/assets/527ab1c9-b37a-40d9-8017-5ad5f1a9a47b" />
+<img width="553" height="728" alt="image" src="https://github.com/user-attachments/assets/527ab1c9-b37a-40d9-8017-5ad5f1a9a47b" /> <img width="293" height="188" alt="image" src="https://github.com/user-attachments/assets/809a1106-d284-4f9d-abbc-2b57ad232814" />
+
 
 # 🎮 Metin2 Gamepad Support (Klasik Mod + Gamepad Birleşik Kontrol)
 
